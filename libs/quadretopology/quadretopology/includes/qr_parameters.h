@@ -77,6 +77,7 @@ struct Parameters {
 #endif
     std::string flow_config_filename;
     std::string satsuma_config_filename;
+    int cuda_flow_strategy = 9;  // 0=satsuma ... 9=hybrid
     bool initialRemeshing;
     double initialRemeshingEdgeFactor;
     bool reproject;

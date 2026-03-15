@@ -1,10 +1,33 @@
-cmake_minimum_required (VERSION 3.9)
+cmake_minimum_required (VERSION 3.18)
 cmake_policy(SET CMP0069 NEW) # honor INTERPROCEDURAL_OPTIMIZATION
 
-project (Quadwild
-    VERSION 0.0.2
-    LANGUAGES C CXX # OpenMesh cmake does not work without C enabled
-    )
+# Try to find CUDA compiler before project()
+# If CMAKE_CUDA_COMPILER is set via env or -D, use it
+if(NOT CMAKE_CUDA_COMPILER)
+    # Try common CUDA install locations
+    find_program(_NVCC_PATH nvcc
+        PATHS /usr/local/cuda/bin /usr/local/cuda-12/bin /usr/local/cuda-13/bin
+        NO_DEFAULT_PATH)
+    if(_NVCC_PATH)
+        set(CMAKE_CUDA_COMPILER "${_NVCC_PATH}")
+    endif()
+endif()
+
+if(CMAKE_CUDA_COMPILER)
+    project (Quadwild
+        VERSION 0.1.0
+        LANGUAGES C CXX CUDA
+        )
+    set(QUADWILD_HAS_CUDA ON)
+    message(STATUS "CUDA found: ${CMAKE_CUDA_COMPILER} — building with GPU acceleration")
+else()
+    project (Quadwild
+        VERSION 0.1.0
+        LANGUAGES C CXX
+        )
+    set(QUADWILD_HAS_CUDA OFF)
+    message(STATUS "CUDA not found — building CPU-only")
+endif()
 
 list (APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake-library/finders)
 set(CMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY ON)
@@ -98,8 +121,11 @@ target_link_libraries(vcglib PUBLIC Eigen3::Eigen)
 target_link_libraries(vcglib PUBLIC libigl::libigl)
 add_library(vcglib::vcglib ALIAS vcglib)
 
+# CUDA acceleration library (must come before quadretopology which uses it)
+add_subdirectory(cuda)
+
 add_subdirectory("libs/quadretopology")
-#add_subdirectory("libs/vcglib") 
+#add_subdirectory("libs/vcglib")
 add_library(quadwild::xfield_tracer INTERFACE IMPORTED)
 target_include_directories(quadwild::xfield_tracer INTERFACE "libs/xfield_tracer")
 target_link_libraries(quadwild::xfield_tracer INTERFACE vcglib::vcglib)
@@ -108,7 +134,5 @@ target_link_libraries(quadwild::xfield_tracer INTERFACE vcglib::vcglib)
 add_subdirectory("components/quad_from_patches")
 add_subdirectory("components/field_computation")
 add_subdirectory("components/viz_mesh_results")
-
-
 
 add_subdirectory(quadwild)

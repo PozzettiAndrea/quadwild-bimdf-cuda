@@ -63,4 +63,9 @@ target_link_libraries(quadretopology PUBLIC lpsolve::lpsolve)
 target_link_libraries(quadretopology PUBLIC OpenMesh::Core)
 target_link_libraries(quadretopology PUBLIC nlohmann_json::nlohmann_json)
 
+# Link CUDA acceleration library (provides QUADWILD_HAS_CUDA define + bimdf_bridge.h)
+if(TARGET quadwild::cuda)
+    target_link_libraries(quadretopology PUBLIC quadwild::cuda)
+endif()
+
 add_library(quadwild::quadretopology ALIAS quadretopology)

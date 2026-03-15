@@ -36,6 +36,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <libsatsuma/Extra/Highlevel.hh>
 #include <libTimekeeper/StopWatchPrinting.hh>
 
+#if QUADWILD_HAS_CUDA
+#include <bimdf_bridge.h>
+#endif
+
 namespace QuadRetopology {
 using Satsuma::BiMDF;
 using Node = Satsuma::BiMDF::Node;
@@ -738,7 +742,13 @@ FlowResult findSubdivisionsFlow(
     auto solve_and_apply = [&](FlowProblem const &problem) {
 
         std::cout << "\nflow problem setup complete, solving..." << std::endl;
+#if QUADWILD_HAS_CUDA
+        auto cuda_strategy = (qw::cuda::FlowStrategy)parameters.cuda_flow_strategy;
+        std::cout << "Using GPU BiMDF solver (strategy: " << qw::cuda::flow_strategy_name(cuda_strategy) << ")..." << std::endl;
+        auto res = qw::cuda::solve_bimdf_cuda(*problem.bimdf, satsuma_config, cuda_strategy);
+#else
         auto res = solve_bimdf(*problem.bimdf, satsuma_config);
+#endif
 
         const auto &sol = *res.solution.get();
         bimdf_results.push_back(std::move(res));
