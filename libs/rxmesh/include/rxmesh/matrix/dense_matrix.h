@@ -1,0 +1,1281 @@
+#pragma once
+#include <iomanip>
+#include <vector>
+#include "cublas_v2.h"
+#include "cusparse.h"
+
+#include "rxmesh/attribute.h"
+#include "rxmesh/context.h"
+#include "rxmesh/rxmesh.h"
+#include "rxmesh/types.h"
+
+#include "rxmesh/kernels/util.cuh"
+#include "rxmesh/util/meta.h"
+
+#include <Eigen/Dense>
+
+#ifdef USE_CUDSS
+#include <cudss.h>
+#endif
+
+namespace rxmesh {
+/**
+ * @brief dense matrix use for device and host, inside is a array.
+ * The dense matrix is initialized as col major on device.
+ * We would only support col major dense matrix for now since that's what
+ * cusparse and cusolver wants. However, there is a limited number of operations
+ * defined on row major matrices.
+ * Order define the storage order of the matrix.
+ */
+template <typename T, int Order = Eigen::ColMajor>
+struct DenseMatrix
+{
+    using IndexT = int;
+    using Type   = T;
+
+    static constexpr int OrderT = Order;
+
+    template <typename U>
+    friend class SparseMatrix;
+
+    using EigenDenseMatrix =
+        Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Order>;
+
+    using EigenDenseMatrixMap = Eigen::Map<EigenDenseMatrix>;
+
+
+    DenseMatrix()
+        : m_allocated(LOCATION_NONE),
+          m_num_rows(0),
+          m_num_cols(0),
+          m_dendescr(NULL),
+          m_d_val(nullptr),
+          m_h_val(nullptr),
+          m_cublas_handle(nullptr),
+          m_user_managed(false)
+    {
+#ifdef USE_CUDSS
+        m_cudss_matrix = nullptr;
+#endif
+    }
+
+
+    /**
+     * @brief Allocating a dense matrix with a size tied to the number of
+     * elements in the mesh, i.e., num_rows should be either the number
+     * of vertices, edges, or faces. With constructor, the user can access
+     * the matrix using mesh handles
+     */
+    explicit DenseMatrix(const RXMesh& rx,
+                         IndexT        num_rows,
+                         IndexT        num_cols,
+                         locationT     location)
+        : m_context(rx.get_context()),
+          m_num_rows(num_rows),
+          m_num_cols(num_cols),
+          m_dendescr(NULL),
+          m_h_val(nullptr),
+          m_d_val(nullptr),
+          m_cublas_handle(nullptr),
+          m_user_managed(false)
+    {
+#ifdef USE_CUDSS
+        m_cudss_matrix = nullptr;
+#endif
+        allocate(location);
+        init_cublas();
+        init_cudss();
+    }
+
+    /**
+     * @brief Allocate a dense matrix that is not necessarily tied to the mesh.
+     * So the size (num_rows) can be anything. However, using this constructor
+     * means that you can not access the matrix using handles
+     */
+    explicit DenseMatrix(IndexT num_rows, IndexT num_cols, locationT location)
+        : m_num_rows(num_rows),
+          m_num_cols(num_cols),
+          m_dendescr(NULL),
+          m_h_val(nullptr),
+          m_d_val(nullptr),
+          m_cublas_handle(nullptr),
+          m_user_managed(false)
+    {
+#ifdef USE_CUDSS
+        m_cudss_matrix = nullptr;
+#endif
+        allocate(location);
+        init_cublas();
+        init_cudss();
+    }
+
+    /**
+     * @brief constructor with user managed mode where the device and host
+     * pointers are passed by the user. They are allocated (and will be freed)
+     * by the user
+     * @param num_rows number of rows in the matrix
+     * @param num_cols number of columns in the matrix
+     * @param d_ptr device pointer to 1D array containing the matrix values
+     * @param h_ptr host pointer to 1D array containing the matrix values
+     */
+    DenseMatrix(IndexT num_rows, IndexT num_cols, T* d_ptr, T* h_ptr)
+        : DenseMatrix()
+    {
+        m_user_managed = true;
+
+        m_allocated = m_allocated | DEVICE;
+        m_allocated = m_allocated | HOST;
+
+
+        m_num_rows = num_rows;
+        m_num_cols = num_cols;
+
+        m_h_val = h_ptr;
+        m_d_val = d_ptr;
+
+        init_cublas();
+        init_cudss();
+    }
+
+    /**
+     * @brief return the leading dimension (row by default)
+     */
+    __host__ __device__ IndexT lead_dim() const
+    {
+        if constexpr (Order == Eigen::ColMajor) {
+            return m_num_rows;
+        } else {
+            return m_num_cols;
+        }
+    }
+
+    /**
+     * @brief return number of rows
+     */
+    __host__ __device__ IndexT rows() const
+    {
+        return m_num_rows;
+    }
+
+    /**
+     * @brief return number of columns
+     */
+    __host__ __device__ IndexT cols() const
+    {
+        return m_num_cols;
+    }
+
+    /**
+     * @brief set all entries in the matrix to certain value on both host and
+     * device
+     */
+    __host__ void reset(T val, locationT location, cudaStream_t stream = NULL)
+    {
+
+        bool do_device = (location & DEVICE) == DEVICE;
+        bool do_host   = (location & HOST) == HOST;
+
+        if (do_device && do_host) {
+            std::fill_n(m_h_val, rows() * cols(), val);
+            CUDA_ERROR(cudaMemcpyAsync(m_d_val,
+                                       m_h_val,
+                                       rows() * cols() * sizeof(T),
+                                       cudaMemcpyHostToDevice,
+                                       stream));
+        } else if (do_device) {
+            const int    threads = 512;
+            const IndexT nnz     = rows() * cols();
+            memsett<<<DIVIDE_UP(nnz, threads), threads, 0, stream>>>(
+                m_d_val, val, nnz);
+        } else if (do_host) {
+            std::fill_n(m_h_val, rows() * cols(), val);
+        }
+    }
+
+    /**
+     * @brief fill in the matrix with random numbers on both host and device
+     * @return
+     */
+    __host__ void fill_random(double minn = -1.0, double maxx = 1.0)
+    {
+        std::random_device rd;
+        std::mt19937       gen(rd());
+
+        if constexpr (std::is_same_v<T, cuComplex> ||
+                      std::is_same_v<T, float>) {
+            std::uniform_real_distribution<float> dis(static_cast<float>(minn),
+                                                      static_cast<float>(maxx));
+
+            for (int i = 0; i < rows() * cols(); ++i) {
+                if constexpr (std::is_same_v<T, cuComplex>) {
+                    m_h_val[i].x = dis(gen);
+                    m_h_val[i].y = dis(gen);
+                }
+                if constexpr (std::is_same_v<T, float>) {
+                    m_h_val[i] = dis(gen);
+                }
+            }
+        }
+
+        if constexpr (std::is_same_v<T, cuDoubleComplex> ||
+                      std::is_same_v<T, double>) {
+            std::uniform_real_distribution<double> dis(
+                static_cast<double>(minn), static_cast<double>(maxx));
+
+            for (int i = 0; i < rows() * cols(); ++i) {
+                if constexpr (std::is_same_v<T, cuDoubleComplex>) {
+                    m_h_val[i].x = dis(gen);
+                    m_h_val[i].y = dis(gen);
+                }
+                if constexpr (std::is_same_v<T, double>) {
+                    m_h_val[i] = dis(gen);
+                }
+            }
+        }
+
+        if constexpr (std::is_same_v<T, int> || std::is_same_v<T, int32_t>) {
+            std::uniform_int_distribution<int> dis(static_cast<int>(minn),
+                                                   static_cast<int>(maxx));
+
+            for (int i = 0; i < rows() * cols(); ++i) {
+                m_h_val[i] = dis(gen);
+            }
+        }
+
+        if constexpr (std::is_same_v<T, uint32_t>) {
+            std::uniform_int_distribution<uint32_t> dis(
+                static_cast<uint32_t>(minn), static_cast<uint32_t>(maxx));
+
+            for (int i = 0; i < rows() * cols(); ++i) {
+                m_h_val[i] = dis(gen);
+            }
+        }
+
+
+        if constexpr (std::is_same_v<T, int64_t>) {
+            std::uniform_int_distribution<int64_t> dis(
+                static_cast<int64_t>(minn), static_cast<int64_t>(maxx));
+
+            for (int i = 0; i < rows() * cols(); ++i) {
+                m_h_val[i] = dis(gen);
+            }
+        }
+
+        if constexpr (std::is_same_v<T, uint64_t>) {
+            std::uniform_int_distribution<uint64_t> dis(
+                static_cast<uint64_t>(minn), static_cast<uint64_t>(maxx));
+
+            for (int i = 0; i < rows() * cols(); ++i) {
+                m_h_val[i] = dis(gen);
+            }
+        }
+
+
+        CUDA_ERROR(
+            cudaMemcpy(m_d_val, m_h_val, bytes(), cudaMemcpyHostToDevice));
+    }
+
+    /**
+     * @brief accessing a specific value in the matrix using the row and col
+     * index. Can be used on both host and device
+     */
+    __host__ __device__ T& operator()(const IndexT row, const IndexT col = 0)
+    {
+        assert(row < m_num_rows);
+        assert(col < m_num_cols);
+
+#ifdef __CUDA_ARCH__
+        return m_d_val[get_index(row, col)];
+#else
+        return m_h_val[get_index(row, col)];
+#endif
+    }
+
+    /**
+     * @brief accessing a specific value in the matrix using the row and col
+     * index. Can be used on both host and device
+     */
+    __host__ __device__ const T& operator()(const IndexT row,
+                                            const IndexT col = 0) const
+    {
+        assert(row < m_num_rows);
+        assert(col < m_num_cols);
+
+#ifdef __CUDA_ARCH__
+        return m_d_val[get_index(row, col)];
+#else
+        return m_h_val[get_index(row, col)];
+#endif
+    }
+
+
+    /**
+     * @brief access the matrix using vertex/edge/face handle as a row index.
+     * This can only be used in non user-managed mode
+     */
+    template <typename HandleT>
+    __host__ __device__ T& operator()(const HandleT handle,
+                                      const IndexT  col = 0)
+    {
+        return this->operator()(get_row_id(handle), col);
+    }
+
+    /**
+     * @brief access the matrix using vertex/edge/face handle as a row index.
+     * This can only be used in non user-managed mode
+     */
+    template <typename HandleT>
+    __host__ __device__ const T& operator()(const HandleT handle,
+                                            const IndexT  col = 0) const
+    {
+        return this->operator()(get_row_id(handle), col);
+    }
+
+
+    /**
+     * @brief reinterprets the underlying flat storage with a new shape without
+     * copying or modifying the data. The matrix remains in the same memory
+     * layout (row-major or column-major), and element ordering is preserved.
+     * The product of the new_num_rows*new_num_cols should match the product
+     * of the current num_rows*num_cols
+     * @param new_num_rows The new number of rows
+     * @param new_num_cols The new number of columns
+     * @return
+     */
+    __host__ __device__ __inline__ void reshape(int new_num_rows,
+                                                int new_num_cols)
+    {
+        long long size_old = (long long)m_num_rows * (long long)m_num_cols;
+        long long size_new = (long long)new_num_rows * (long long)new_num_cols;
+
+        assert(size_old == size_new);
+
+        m_num_rows = new_num_rows;
+        m_num_cols = new_num_cols;
+
+
+#ifndef __CUDA_ARCH__
+        // make sure that cuSparse knows about these changes
+        // just in case we used this matrix to multiply with a sparse matrix
+        if (std::is_floating_point_v<T> || std::is_same_v<T, int> ||
+            std::is_same_v<T, cuComplex> ||
+            std::is_same_v<T, cuDoubleComplex>) {
+            CUSPARSE_ERROR(cusparseCreateDnMat(&m_dendescr,
+                                               m_num_rows,
+                                               m_num_cols,
+                                               m_num_rows,  // leading dim
+                                               m_d_val,
+                                               cuda_type<T>(),
+                                               CUSPARSE_ORDER_COL));
+        }
+        init_cudss();
+#endif
+    }
+
+
+#ifdef USE_CUDSS
+    /**
+     * @brief Return cuDSS matrix
+     */
+    __host__ cudssMatrix_t& get_cudss_matrix()
+    {
+        return m_cudss_matrix;
+    }
+#endif
+
+    /**
+     * @brief compute the sum of the absolute value of all elements in the
+     * matrix. For complex types (cuComples and cuDoubleComplex), we sum the
+     * absolute value of the real and absolute value of the imaginary part. The
+     * results are computed for the data on the device. Only float, double,
+     * cuComplex, and cuDoubleComplex are supported
+     * @param stream
+     * @return
+     */
+
+    __host__ BaseTypeT<T> abs_sum(cudaStream_t stream = NULL)
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double> &&
+                      !std::is_same_v<T, cuComplex> &&
+                      !std::is_same_v<T, cuDoubleComplex>) {
+            RXMESH_ERROR(
+                "DenseMatrix::abs_sum() only float, double, cuComplex, and "
+                "cuDoubleComplex are supported for this function!");
+            return BaseTypeT<T>(0);
+        }
+
+        BaseTypeT<T> result;
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasSasum(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasDasum(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        if constexpr (std::is_same_v<T, cuComplex>) {
+            CUBLAS_ERROR(cublasScasum(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        if constexpr (std::is_same_v<T, cuDoubleComplex>) {
+            CUBLAS_ERROR(cublasDzasum(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        return result;
+    }
+
+    /**
+     * @brief compute the following
+     * Y = alpha * X + Y
+     * where Y is this dense matrix, X is another dense matrix that has the same
+     * dimensions as Y and alpha is a scalar. The results are computed for the
+     * data on the device. Only float, double, cuComplex, and cuDoubleComplex
+     * are supported
+     */
+    __host__ void axpy(DenseMatrix<T, Order>& X,
+                       T                      alpha,
+                       cudaStream_t           stream = NULL)
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double> &&
+                      !std::is_same_v<T, cuComplex> &&
+                      !std::is_same_v<T, cuDoubleComplex>) {
+            RXMESH_ERROR(
+                "DenseMatrix::axpy() only float, double, cuComplex, and "
+                "cuDoubleComplex are supported for this function!");
+            return;
+        }
+
+
+        if (rows() != X.rows() || cols() != X.cols()) {
+            RXMESH_ERROR(
+                "DenseMatrix::axpy() The input matrices size does not match. "
+                "This matrix size is {},{} while X size is {},{}",
+                rows(),
+                cols(),
+                X.rows(),
+                X.cols());
+            return;
+        }
+
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasSaxpy(m_cublas_handle,
+                                     rows() * cols(),
+                                     &alpha,
+                                     X.m_d_val,
+                                     1,
+                                     m_d_val,
+                                     1));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasDaxpy(m_cublas_handle,
+                                     rows() * cols(),
+                                     &alpha,
+                                     X.m_d_val,
+                                     1,
+                                     m_d_val,
+                                     1));
+        }
+
+        if constexpr (std::is_same_v<T, cuComplex>) {
+            CUBLAS_ERROR(cublasCaxpy(m_cublas_handle,
+                                     rows() * cols(),
+                                     &alpha,
+                                     X.m_d_val,
+                                     1,
+                                     m_d_val,
+                                     1));
+        }
+
+        if constexpr (std::is_same_v<T, cuDoubleComplex>) {
+            CUBLAS_ERROR(cublasZaxpy(m_cublas_handle,
+                                     rows() * cols(),
+                                     &alpha,
+                                     X.m_d_val,
+                                     1,
+                                     m_d_val,
+                                     1));
+        }
+    }
+
+    /**
+     * @brief compute the dot produce with another dense matrix. If the matrix
+     * is a 1D vector, it is the inner product. If the matrix represents a 2D
+     * matrix, then it is the sum of the element-wise multiplication. The
+     * results are computed for the data on the device. Only float, double,
+     * cuComplex, and cuDoubleComplex are supported. For complex matrices
+     * (cuComplex and cuDoubleComplex), it is optional to use the conjugate of
+     * x.
+     */
+    __host__ T dot(const DenseMatrix<T, Order>& x,
+                   bool                         use_conjugate = false,
+                   cudaStream_t                 stream        = NULL) const
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double> &&
+                      !std::is_same_v<T, cuComplex> &&
+                      !std::is_same_v<T, cuDoubleComplex>) {
+            RXMESH_ERROR(
+                "DenseMatrix::dot() only float, double, cuComplex, and "
+                "cuDoubleComplex are supported for this function!");
+            return T(0);
+        }
+
+        T result;
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasSdot(m_cublas_handle,
+                                    rows() * cols(),
+                                    x.m_d_val,
+                                    1,
+                                    m_d_val,
+                                    1,
+                                    &result));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasDdot(m_cublas_handle,
+                                    rows() * cols(),
+                                    x.m_d_val,
+                                    1,
+                                    m_d_val,
+                                    1,
+                                    &result));
+        }
+
+        if constexpr (std::is_same_v<T, cuComplex>) {
+            if (use_conjugate) {
+                CUBLAS_ERROR(cublasCdotc(m_cublas_handle,
+                                         rows() * cols(),
+                                         x.m_d_val,
+                                         1,
+                                         m_d_val,
+                                         1,
+                                         &result));
+            } else {
+                CUBLAS_ERROR(cublasCdotu(m_cublas_handle,
+                                         rows() * cols(),
+                                         x.m_d_val,
+                                         1,
+                                         m_d_val,
+                                         1,
+                                         &result));
+            }
+        }
+
+        if constexpr (std::is_same_v<T, cuDoubleComplex>) {
+            if (use_conjugate) {
+                CUBLAS_ERROR(cublasZdotc(m_cublas_handle,
+                                         rows() * cols(),
+                                         x.m_d_val,
+                                         1,
+                                         m_d_val,
+                                         1,
+                                         &result));
+            } else {
+                CUBLAS_ERROR(cublasZdotu(m_cublas_handle,
+                                         rows() * cols(),
+                                         x.m_d_val,
+                                         1,
+                                         m_d_val,
+                                         1,
+                                         &result));
+            }
+        }
+
+        return result;
+    }
+
+
+    /**
+     * @brief compute the norm of a dense matrix which is computed as
+     * sqrt(\sum (x[i]*x[i]**H) for i = 0,...,n*m where n is number of rows and
+     * m is number of columns, and **H denotes the conjugate if x is complex
+     * number. The results are computed for the data on the device. Only float,
+     * double, cuComplex, and cuDoubleComplex are supported.
+     */
+    __host__ BaseTypeT<T> norm2(cudaStream_t stream = NULL)
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double> &&
+                      !std::is_same_v<T, cuComplex> &&
+                      !std::is_same_v<T, cuDoubleComplex>) {
+            RXMESH_ERROR(
+                "DenseMatrix::norm2() only float, double, cuComplex, and "
+                "cuDoubleComplex are supported for this function!");
+            return BaseTypeT<T>(0);
+        }
+
+        BaseTypeT<T> result;
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasSnrm2(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasDnrm2(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        if constexpr (std::is_same_v<T, cuComplex>) {
+            CUBLAS_ERROR(cublasScnrm2(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        if constexpr (std::is_same_v<T, cuDoubleComplex>) {
+            CUBLAS_ERROR(cublasDznrm2(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &result));
+        }
+
+        return result;
+    }
+
+
+    /**
+     * @brief return the absolute max value in the matrix
+     */
+    __host__ T abs_max(cudaStream_t stream = NULL)
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double>) {
+            RXMESH_ERROR(
+                "DenseMatrix::max() only float and double are supported for "
+                "this function!");
+            return T(0);
+        }
+
+        IndexT index;
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasIsamax(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &index));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasIdamax(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &index));
+        }
+
+        index -= 1;
+
+        T ret = 0;
+
+        CUDA_ERROR(cudaMemcpyAsync(
+            &ret, m_d_val + index, sizeof(T), cudaMemcpyDeviceToHost));
+
+        return std::abs(ret);
+    }
+
+    /**
+     * @brief return the absolute min value in the matrix
+     */
+    __host__ T abs_min(cudaStream_t stream = NULL)
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double>) {
+            RXMESH_ERROR(
+                "DenseMatrix::min() only float and double are supported for "
+                "this function!");
+            return T(0);
+        }
+
+        IndexT index;
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasIsamin(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &index));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasIdamin(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, &index));
+        }
+
+        T ret = 0;
+
+        CUDA_ERROR(cudaMemcpyAsync(
+            &ret, m_d_val + index, sizeof(T), cudaMemcpyDeviceToHost));
+
+        return std::abs(ret);
+    }
+
+
+    /**
+     * @brief multiply all entries in the dense matrix by a scalar (i.e.,
+     * scaling). For complex number, the scalar could be either a complex or
+     * real number. The results are computed for the data on the device. Only
+     * float, double, cuComplex, and cuDoubleComplex are supported.
+     */
+    template <typename U>
+    __host__ void multiply(U scalar, cudaStream_t stream = NULL)
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double> &&
+                      !std::is_same_v<T, cuComplex> &&
+                      !std::is_same_v<T, cuDoubleComplex>) {
+            RXMESH_ERROR(
+                "DenseMatrix::multiply() only float, double, cuComplex, and "
+                "cuDoubleComplex are supported for this function!");
+            return T(0);
+        }
+
+
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasSscal(
+                m_cublas_handle, rows() * cols(), &scalar, m_d_val, 1));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasDscal(
+                m_cublas_handle, rows() * cols(), &scalar, m_d_val, 1));
+        }
+
+        if constexpr (std::is_same_v<T, cuComplex>) {
+            if constexpr (std::is_same_v<U, cuComplex>) {
+                CUBLAS_ERROR(cublasCscal(
+                    m_cublas_handle, rows() * cols(), &scalar, m_d_val, 1));
+            } else {
+                CUBLAS_ERROR(cublasCsscal(
+                    m_cublas_handle, rows() * cols(), &scalar, m_d_val, 1));
+            }
+        }
+
+        if constexpr (std::is_same_v<T, cuDoubleComplex>) {
+            if constexpr (std::is_same_v<U, cuDoubleComplex>) {
+                CUBLAS_ERROR(cublasZscal(
+                    m_cublas_handle, rows() * cols(), &scalar, m_d_val, 1));
+            } else {
+                CUBLAS_ERROR(cublasZdscal(
+                    m_cublas_handle, rows() * cols(), &scalar, m_d_val, 1));
+            }
+        }
+    }
+
+    /**
+     * @brief Swap the content of this dense matrix with another dense matrix.
+     * The results are computed for the data on the device. Only float, double,
+     * cuComplex, and cuDoubleComplex are supported.
+     */
+    __host__ void swap(DenseMatrix<T, Order>& X, cudaStream_t stream = NULL)
+    {
+        CUBLAS_ERROR(cublasSetStream(m_cublas_handle, stream));
+        if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, double> &&
+                      !std::is_same_v<T, cuComplex> &&
+                      !std::is_same_v<T, cuDoubleComplex>) {
+            RXMESH_ERROR(
+                "DenseMatrix::swap() only float, double, cuComplex, and "
+                "cuDoubleComplex are supported for this function!");
+            return;
+        }
+
+        if (rows() != X.rows() || cols() != X.cols()) {
+            RXMESH_ERROR(
+                "DenseMatrix::swap() The input matrices size does not match. "
+                "This matrix size is {},{} while X size is {},{}",
+                rows(),
+                cols(),
+                X.rows(),
+                X.cols());
+            return;
+        }
+
+
+        if constexpr (std::is_same_v<T, float>) {
+            CUBLAS_ERROR(cublasSswap(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, X.m_d_val, 1));
+        }
+
+        if constexpr (std::is_same_v<T, double>) {
+            CUBLAS_ERROR(cublasDswap(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, X.m_d_val, 1));
+        }
+
+        if constexpr (std::is_same_v<T, cuComplex>) {
+            CUBLAS_ERROR(cublasCswap(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, X.m_d_val, 1));
+        }
+
+        if constexpr (std::is_same_v<T, cuDoubleComplex>) {
+            CUBLAS_ERROR(cublasZswap(
+                m_cublas_handle, rows() * cols(), m_d_val, 1, X.m_d_val, 1));
+        }
+    }
+
+    /**
+     * @brief return the row index corresponding to specific vertex/edge/face
+     * handle. This can only be used non user-managed mode
+     */
+    template <typename HandleT>
+    __host__ __device__ IndexT get_row_id(const HandleT handle) const
+    {
+        auto id = handle.unpack();
+
+        IndexT row;
+
+        if constexpr (std::is_same_v<HandleT, VertexHandle>) {
+            assert(m_context.vertex_prefix() != nullptr);
+            row = m_context.vertex_prefix()[id.first] + id.second;
+        }
+
+        if constexpr (std::is_same_v<HandleT, EdgeHandle>) {
+            assert(m_context.edge_prefix() != nullptr);
+            row = m_context.edge_prefix()[id.first] + id.second;
+        }
+
+        if constexpr (std::is_same_v<HandleT, FaceHandle>) {
+            assert(m_context.face_prefix() != nullptr);
+            row = m_context.face_prefix()[id.first] + id.second;
+        }
+
+        return row;
+    }
+
+    /**
+     * @brief return the raw pointer based on the specified location (host vs.
+     * device)
+     */
+    __host__ __device__ T* data(locationT location = DEVICE) const
+    {
+        if ((location & HOST) == HOST) {
+            return m_h_val;
+        }
+
+        if ((location & DEVICE) == DEVICE) {
+            return m_d_val;
+        }
+
+        assert(1 != 1);
+        return nullptr;
+    }
+
+
+    /**
+     * @brief return a DenseMatrix that hold a specific column (i.e., slicing)
+     */
+    __host__ const DenseMatrix<T, Order> col(const IndexT col_id) const
+    {
+        DenseMatrix<T, Order> ret(
+            rows(), 1, col_data(col_id, DEVICE), col_data(col_id, HOST));
+        ret.m_context = m_context;
+        return ret;
+    }
+
+    /**
+     * @brief return a DenseMatrix that hold a specific column (i.e., slicing)
+     */
+    __host__ DenseMatrix<T, Order> col(const IndexT col_id)
+    {
+        DenseMatrix<T, Order> ret(
+            rows(), 1, col_data(col_id, DEVICE), col_data(col_id, HOST));
+        ret.m_context = m_context;
+        return ret;
+    }
+
+    /**
+     * @brief return the raw pointer of a column.
+     */
+    __host__ const T* col_data(const IndexT ld_idx,
+                               locationT    location = DEVICE) const
+    {
+        if ((location & HOST) == HOST) {
+            return m_h_val + ld_idx * m_num_rows;
+        }
+
+        if ((location & DEVICE) == DEVICE) {
+            return m_d_val + ld_idx * m_num_rows;
+        }
+
+        if ((location & m_allocated) != location) {
+            RXMESH_ERROR(
+                "DenseMatrix::col_data() Requested data not allocated on {}",
+                location_to_string(location));
+        }
+
+        return nullptr;
+    }
+
+    /**
+     * @brief return the raw pointer pf a column.
+     */
+    __host__ T* col_data(const IndexT ld_idx, locationT location = DEVICE)
+    {
+        if ((location & HOST) == HOST) {
+            return m_h_val + ld_idx * m_num_rows;
+        }
+
+        if ((location & DEVICE) == DEVICE) {
+            return m_d_val + ld_idx * m_num_rows;
+        }
+
+        if ((location & m_allocated) != location) {
+            RXMESH_ERROR(
+                "DenseMatrix::col_data() Requested data not allocated on {}",
+                location_to_string(location));
+        }
+
+        return nullptr;
+    }
+
+
+    /**
+     * @brief return a DenseMatrix that holds a 1D slice (view) of the
+     * underlying storage, interpreted as a flat array of length rows()*cols().
+     * The slice starts at linear index `start` and has `count` elements.
+     * No data is copied; the returned matrix wraps pointers into this object.
+     */
+    __host__ DenseMatrix<T, Order> segment(const IndexT start,
+                                           const IndexT count)
+    {
+        const IndexT n = rows() * cols();
+        assert(start >= 0);
+        assert(count >= 0);
+        assert(start + count <= n);
+
+        T* d_ptr = nullptr;
+        T* h_ptr = nullptr;
+
+        if ((m_allocated & DEVICE) == DEVICE) {
+            d_ptr = m_d_val + start;
+        }
+        if ((m_allocated & HOST) == HOST) {
+            h_ptr = m_h_val + start;
+        }
+
+        // Represent the 1D slice as a column vector of length `count`.
+        DenseMatrix<T, Order> ret(count, 1, d_ptr, h_ptr);
+        ret.m_context = m_context;
+        return ret;
+    }
+
+    /**
+     * @brief 1D slice specified by range [start, end) in the flattened storage.
+     */
+    __host__ DenseMatrix<T, Order> segment_range(const IndexT start,
+                                                 const IndexT end)
+    {
+        assert(end >= start);
+        return segment(start, end - start);
+    }
+
+
+    /**
+     * @brief return the total number bytes used to allocate the matrix
+     */
+    __host__ __device__ IndexT bytes() const
+    {
+        return m_num_rows * m_num_cols * sizeof(T);
+    }
+
+    /**
+     * @brief move the data between host and device
+     */
+    __host__ void move(locationT    source,
+                       locationT    target,
+                       cudaStream_t stream = NULL)
+    {
+        if (source == target) {
+            RXMESH_WARN(
+                "DenseMatrix::move() source ({}) and target ({}) "
+                "are the same.",
+                location_to_string(source),
+                location_to_string(target));
+            return;
+        }
+
+        if ((source == HOST || source == DEVICE) &&
+            ((source & m_allocated) != source)) {
+            RXMESH_ERROR(
+                "DenseMatrix::move() moving source is not valid"
+                " because it was not allocated on source i.e., {}",
+                location_to_string(source));
+        }
+
+        if (((target & HOST) == HOST || (target & DEVICE) == DEVICE) &&
+            ((target & m_allocated) != target)) {
+            RXMESH_WARN(
+                "DenseMatrix::move() allocating target before moving to {}",
+                location_to_string(target));
+            allocate(target);
+        }
+
+        if (source == HOST && target == DEVICE) {
+            CUDA_ERROR(cudaMemcpyAsync(
+                m_d_val, m_h_val, bytes(), cudaMemcpyHostToDevice, stream));
+        } else if (source == DEVICE && target == HOST) {
+            CUDA_ERROR(cudaMemcpyAsync(
+                m_h_val, m_d_val, bytes(), cudaMemcpyDeviceToHost, stream));
+        }
+    }
+
+
+    /**
+     * @brief Deep copy from a source matrix. If source_flag and target_flag are
+     * both set to LOCATION_ALL, then we copy what is on host to host, and what
+     * on device to device. If sourc_flag is set to HOST (or DEVICE) and
+     * target_flag is set to LOCATION_ALL, then we copy source's HOST (or
+     * DEVICE) to both HOST and DEVICE. Setting source_flag to
+     * LOCATION_ALL while target_flag is NOT set to LOCATION_ALL is invalid
+     * because we don't know which source to copy from
+     * @param source matrix to copy from
+     * @param source_flag defines where we will copy from
+     * @param target_flag defines where we will copy to
+     * @param stream used to launch kernel/memcpy
+     */
+    __host__ void copy_from(DenseMatrix<T, Order>& source,
+                            locationT              source_flag = LOCATION_ALL,
+                            locationT              target_flag = LOCATION_ALL,
+                            cudaStream_t           stream      = NULL)
+    {
+        if (rows() != source.rows() || cols() != source.cols()) {
+            RXMESH_ERROR(
+                "DenseMatrix::copy_from() the number of rows/cols is "
+                "different!");
+            return;
+        }
+
+        if ((source_flag & LOCATION_ALL) == LOCATION_ALL &&
+            (target_flag & LOCATION_ALL) != LOCATION_ALL) {
+            RXMESH_ERROR("DenseMatrix::copy_from() Invalid configuration!");
+            return;
+        }
+
+        if ((source_flag & m_allocated) != source_flag) {
+            RXMESH_ERROR(
+                "DenseMatrix::copy_from() copying source is not valid"
+                " because it was not allocated on source i.e., {}",
+                location_to_string(source_flag));
+            return;
+        }
+
+        if ((target_flag & m_allocated) != target_flag) {
+            RXMESH_WARN(
+                "DenseMatrix::copy_from() allocating target before moving to "
+                "{}",
+                location_to_string(target_flag));
+            allocate(target_flag);
+        }
+        // 1) copy from HOST to HOST
+        if ((source_flag & HOST) == HOST && (target_flag & HOST) == HOST) {
+            std::memcpy(m_h_val, source.m_h_val, bytes());
+        }
+
+        // 2) copy from DEVICE to DEVICE
+        if ((source_flag & DEVICE) == DEVICE &&
+            (target_flag & DEVICE) == DEVICE) {
+            CUDA_ERROR(cudaMemcpyAsync(m_d_val,
+                                       source.m_d_val,
+                                       bytes(),
+                                       cudaMemcpyDeviceToDevice,
+                                       stream));
+        }
+
+        // 3) copy from DEVICE to HOST
+        if ((source_flag & DEVICE) == DEVICE && (target_flag & HOST) == HOST) {
+            CUDA_ERROR(cudaMemcpyAsync(m_h_val,
+                                       source.m_d_val,
+                                       bytes(),
+                                       cudaMemcpyDeviceToHost,
+                                       stream));
+        }
+
+
+        // 4) copy from HOST to DEVICE
+        if ((source_flag & HOST) == HOST && (target_flag & DEVICE) == DEVICE) {
+            CUDA_ERROR(cudaMemcpyAsync(m_d_val,
+                                       source.m_h_val,
+                                       bytes(),
+                                       cudaMemcpyHostToDevice,
+                                       stream));
+        }
+    }
+
+    /**
+     * @brief export the matrix to MatrixMarket file
+     */
+    __host__ void to_mtx(std::string file_name)
+    {
+        std::ofstream file(file_name);
+        if (!file.is_open()) {
+            RXMESH_ERROR("DenseMatrix::to_mtx() Can not open file {}",
+                         file_name);
+            return;
+        }
+
+        file << "%%MatrixMarket matrix array real general\n";
+        file << "% rows cols\n";
+        file << rows() << " " << cols() << "\n";
+
+        for (IndexT j = 0; j < cols(); ++j) {
+            for (IndexT i = 0; i < rows(); ++i) {
+                file << std::setprecision(17) << operator()(i, j) << "\n";
+            }
+        }
+
+        file.close();
+    }
+
+    /**
+     * @brief Convert/map the dense matrix to Eigen dense matrix. This is a
+     * zero-copy conversion so Eigen dense matrix will point to the same memory
+     * as the host-side of this DenseMatrix
+     */
+    __host__ EigenDenseMatrixMap to_eigen()
+    {
+        return EigenDenseMatrixMap(m_h_val, rows(), cols());
+    }
+
+
+    /**
+     * @brief copy the matrix into Eigen matrix
+     */
+    __host__ EigenDenseMatrix to_eigen_copy()
+    {
+        EigenDenseMatrix ret(rows(), cols());
+        for (int i = 0; i < rows(); ++i) {
+            for (int j = 0; j < cols(); ++j) {
+                ret(i, j) = this->operator()(i, j);
+            }
+        }
+        return ret;
+    }
+
+    /**
+     * @brief release the data on host or device
+     */
+    __host__ void release(locationT location = LOCATION_ALL)
+    {
+        if (!m_user_managed) {
+
+            if (((location & HOST) == HOST) && ((m_allocated & HOST) == HOST) &&
+                m_h_val) {
+                free(m_h_val);
+                m_h_val     = nullptr;
+                m_allocated = m_allocated & (~HOST);
+            }
+
+            if (((location & DEVICE) == DEVICE) &&
+                ((m_allocated & DEVICE) == DEVICE) && m_d_val) {
+                GPU_FREE(m_d_val);
+                m_d_val     = nullptr;
+                m_allocated = m_allocated & (~DEVICE);
+            }
+
+#ifdef USE_CUDSS
+            if ((std::is_floating_point_v<T> || std::is_same_v<T, cuComplex> ||
+                 std::is_same_v<T, cuDoubleComplex>) &&
+                m_cudss_matrix) {
+                CUDSS_ERROR(cudssMatrixDestroy(m_cudss_matrix));
+                m_cudss_matrix = nullptr;
+            }
+#endif
+        }
+
+        if ((location & LOCATION_ALL) == LOCATION_ALL && m_dendescr) {
+            if (m_dendescr) {
+                CUSPARSE_ERROR(cusparseDestroyDnMat(m_dendescr));
+                m_dendescr = nullptr;
+            }
+        }
+    }
+
+   private:
+    /**
+     * @brief allocate the data on host or device
+     */
+    void allocate(locationT location)
+    {
+        if ((location & HOST) == HOST) {
+            // release(HOST);
+
+            m_h_val = static_cast<T*>(malloc(bytes()));
+
+            m_allocated = m_allocated | HOST;
+        }
+
+        if ((location & DEVICE) == DEVICE) {
+            // release(DEVICE);
+
+            CUDA_ERROR(cudaMalloc((void**)&m_d_val, bytes()));
+
+            m_allocated = m_allocated | DEVICE;
+        }
+    }
+
+
+    /**
+     * @brief return the 1d index given the row and column id
+     */
+    __host__ __device__ __inline__ int get_index(IndexT row, IndexT col) const
+    {
+        if constexpr (Order == Eigen::ColMajor) {
+            const int ret = col * m_num_rows + row;
+            assert(ret < rows() * cols());
+            return ret;
+        } else {
+            const int ret = col + row * m_num_cols;
+            assert(ret < rows() * cols());
+            return ret;
+        }
+    }
+
+    /**
+     * @brief initialize cublas
+     */
+    __host__ void init_cublas()
+    {
+        if (std::is_floating_point_v<T> || std::is_same_v<T, int> ||
+            std::is_same_v<T, cuComplex> ||
+            std::is_same_v<T, cuDoubleComplex>) {
+            CUSPARSE_ERROR(cusparseCreateDnMat(&m_dendescr,
+                                               m_num_rows,
+                                               m_num_cols,
+                                               m_num_rows,  // leading dim
+                                               m_d_val,
+                                               cuda_type<T>(),
+                                               CUSPARSE_ORDER_COL));
+        }
+
+        CUBLAS_ERROR(cublasCreate(&m_cublas_handle));
+        CUBLAS_ERROR(
+            cublasSetPointerMode(m_cublas_handle, CUBLAS_POINTER_MODE_HOST));
+    }
+
+
+    /**
+     * @brief initialize cuDSS
+     */
+    __host__ void init_cudss()
+    {
+#ifdef USE_CUDSS
+        if (std::is_floating_point_v<T> || std::is_same_v<T, cuComplex> ||
+            std::is_same_v<T, cuDoubleComplex>) {
+            CUDSS_ERROR(cudssMatrixCreateDn(&m_cudss_matrix,
+                                            m_num_rows,
+                                            m_num_cols,
+                                            m_num_rows,
+                                            m_d_val,
+                                            cuda_type<T>(),
+                                            CUDSS_LAYOUT_COL_MAJOR));
+        }
+#endif
+    }
+
+    Context              m_context;
+    cusparseDnMatDescr_t m_dendescr;
+    cublasHandle_t       m_cublas_handle;
+    locationT            m_allocated;
+    IndexT               m_num_rows;
+    IndexT               m_num_cols;
+    T*                   m_d_val;
+    T*                   m_h_val;
+    bool                 m_user_managed;
+
+#ifdef USE_CUDSS
+    cudssMatrix_t m_cudss_matrix;
+#endif
+};
+
+}  // namespace rxmesh

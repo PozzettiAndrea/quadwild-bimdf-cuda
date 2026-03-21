@@ -36,7 +36,7 @@ if(QUADWILD_HAS_CUDA)
 
     set_target_properties(qw_cuda PROPERTIES
         CUDA_SEPARABLE_COMPILATION OFF
-        CUDA_ARCHITECTURES "86;89"
+        CUDA_ARCHITECTURES "120"
         POSITION_INDEPENDENT_CODE ON
     )
 
@@ -45,7 +45,7 @@ if(QUADWILD_HAS_CUDA)
     # Need satsuma headers for bimdf_bridge.h (header-only bridge)
     target_link_libraries(qw_cuda PUBLIC satsuma::satsuma)
 
-    message(STATUS "Building qw_cuda WITH CUDA kernels (SM 86, 89)")
+    message(STATUS "Building qw_cuda WITH CUDA kernels (SM 120)")
 else()
     # CPU-only: just the checkpoint system
     add_library(qw_cuda

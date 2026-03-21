@@ -1,6 +1,70 @@
 #include "functions.h"
 #include "trace.h"
 
+inline void doRemesh(
+        FieldTriMesh& trimesh,
+        const Parameters& parameters,
+        const std::string& meshFilename,
+        const std::string& sharpFilename)
+{
+    typename MeshPrepocess<FieldTriMesh>::BatchParam BPar;
+    BPar.DoRemesh=parameters.remesh;
+    BPar.gpuRemesh=parameters.gpuRemesh;
+    BPar.feature_erode_dilate=4;
+    BPar.remesher_aspect_ratio=0.35;
+    BPar.remesher_iterations=15;
+    BPar.remesher_termination_delta=10000;
+    BPar.SharpFactor=6;
+    BPar.sharp_feature_thr=parameters.sharpAngle;
+    BPar.surf_dist_check=true;
+    BPar.UpdateSharp=(!parameters.hasFeature);
+
+    if (parameters.hasFeature) {
+        bool loaded=trimesh.LoadSharpFeatures(sharpFilename);
+        if (!loaded) {
+            std::cout<<"ERROR: Wrong Sharp Feature File"<<std::endl;
+            exit(0);
+        }
+        std::cout<<"Sharp Feature Length:"<<trimesh.SharpLenght()<<std::endl;
+    }
+
+    MeshPrepocess<FieldTriMesh>::BatchRemesh(trimesh, BPar);
+
+    // Save remeshed mesh
+    std::string projM=meshFilename;
+    size_t indexExt=projM.find_last_of(".");
+    projM=projM.substr(0,indexExt);
+    std::string meshName=projM+std::string("_rem.obj");
+    std::cout<<"Saving Remeshed Mesh TO:"<<meshName.c_str()<<std::endl;
+    trimesh.SaveTriMesh(meshName.c_str());
+}
+
+inline void doField(
+        FieldTriMesh& trimesh,
+        const Parameters& parameters,
+        const std::string& meshFilename,
+        const std::string& fieldFilename)
+{
+    typename MeshPrepocess<FieldTriMesh>::BatchParam BPar;
+    BPar.SharpFactor=6;
+    BPar.sharp_feature_thr=parameters.sharpAngle;
+
+    typename vcg::tri::FieldSmoother<FieldTriMesh>::SmoothParam FieldParam;
+    FieldParam.alpha_curv=0.3;
+    FieldParam.curv_thr=0.8;
+
+    if (parameters.hasField) {
+        bool success = trimesh.LoadField(fieldFilename.c_str());
+        if (!success) {
+            throw std::runtime_error(std::string("failed to load field from '") + fieldFilename + "'");
+        }
+    } else {
+        MeshPrepocess<FieldTriMesh>::BatchField(trimesh, BPar, FieldParam);
+    }
+
+    MeshPrepocess<FieldTriMesh>::SaveAllData(trimesh, meshFilename);
+}
+
 inline void remeshAndField(
         FieldTriMesh& trimesh,
         const Parameters& parameters,
@@ -10,6 +74,7 @@ inline void remeshAndField(
 {
     typename MeshPrepocess<FieldTriMesh>::BatchParam BPar;
     BPar.DoRemesh=parameters.remesh;
+    BPar.gpuRemesh=parameters.gpuRemesh;
     BPar.feature_erode_dilate=4;
     BPar.remesher_aspect_ratio=0.35; // from field_computation/basic_setup*.txt
     BPar.remesher_iterations=15;

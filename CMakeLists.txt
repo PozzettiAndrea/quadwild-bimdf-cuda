@@ -121,6 +121,53 @@ target_link_libraries(vcglib PUBLIC Eigen3::Eigen)
 target_link_libraries(vcglib PUBLIC libigl::libigl)
 add_library(vcglib::vcglib ALIAS vcglib)
 
+# RXMesh GPU remeshing — single TU build (no separable compilation)
+if(QUADWILD_HAS_CUDA)
+    # METIS (required by RXMesh patcher)
+    set(IDXTYPEWIDTH 32 CACHE STRING "" FORCE)
+    set(REALTYPEWIDTH 32 CACHE STRING "" FORCE)
+    add_subdirectory("libs/rxmesh/third_party/metis")
+    target_include_directories(metis INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libs/rxmesh/third_party/metis/include>)
+    target_compile_definitions(metis INTERFACE
+        IDXTYPEWIDTH=${IDXTYPEWIDTH} REALTYPEWIDTH=${REALTYPEWIDTH})
+
+    find_package(CUDAToolkit REQUIRED)
+
+    add_library(qw_rxmesh_remesh cuda/rxmesh_remesh.cu)
+    set_target_properties(qw_rxmesh_remesh PROPERTIES
+        CUDA_SEPARABLE_COMPILATION OFF
+        CUDA_ARCHITECTURES "120"
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_include_directories(qw_rxmesh_remesh PUBLIC
+        cuda
+        libs/rxmesh/include
+        libs/rxmesh/third_party
+    )
+    target_link_libraries(qw_rxmesh_remesh PUBLIC
+        Eigen3::Eigen metis
+        CUDA::cudart CUDA::cusparse CUDA::cusolver)
+    target_compile_definitions(qw_rxmesh_remesh PUBLIC
+        EIGEN_DEFAULT_DENSE_INDEX_TYPE=int)
+    target_compile_options(qw_rxmesh_remesh PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:
+            --expt-extended-lambda
+            --expt-relaxed-constexpr
+            -Xcudafe=--diag_suppress=177
+            -Xcudafe=--diag_suppress=174
+            -Xcudafe=--diag_suppress=20054
+            -w
+        >
+        $<$<COMPILE_LANGUAGE:CXX>:-w>
+    )
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(qw_rxmesh_remesh PUBLIC OpenMP::OpenMP_CXX)
+    endif()
+    add_library(quadwild::rxmesh_remesh ALIAS qw_rxmesh_remesh)
+endif()
+
 # CUDA acceleration library (must come before quadretopology which uses it)
 add_subdirectory(cuda)
 

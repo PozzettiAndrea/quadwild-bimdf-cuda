@@ -34,8 +34,9 @@ struct QuadwildCheckpointFlags {
     std::string save_dir;
     bool save_all = false;
     int run_from_step = 1;  // 1=remesh, 2=trace, 3=quadrangulate
-    int run_to_step = 3;
+    int run_to_step = 4;
     bool list_stages = false;
+    bool gpu_remesh = false;
 };
 
 static void parse_flags(int argc, char* argv[], QuadwildCheckpointFlags& f) {
@@ -50,6 +51,8 @@ static void parse_flags(int argc, char* argv[], QuadwildCheckpointFlags& f) {
             f.run_to_step = atoi(argv[++i]);
         } else if (strcmp(argv[i], "-list-stages") == 0) {
             f.list_stages = true;
+        } else if (strcmp(argv[i], "-gpu-remesh") == 0) {
+            f.gpu_remesh = true;
         }
     }
 }
@@ -81,11 +84,12 @@ int actual_main(int argc, char* argv[])
 
     if (ckpt.list_stages) {
         printf("QuadWild pipeline stages:\n");
-        printf("  1: Remesh and field computation\n");
-        printf("  2: Field tracing\n");
-        printf("  3: Quadrangulation (uses quad_from_patches stages internally)\n");
-        printf("\nFor fine-grained checkpointing within step 3, use quad_from_patches directly.\n");
-        printf("Use -run-from N -run-to M to run steps N through M.\n");
+        printf("  1: Remesh (isotropic remeshing + feature detection)\n");
+        printf("  2: Field (cross field computation)\n");
+        printf("  3: Trace (field tracing / T-mesh layout)\n");
+        printf("  4: Quadrangulate (quantization + tessellation)\n");
+        printf("\nUse -run-from N -run-to M to run steps N through M.\n");
+        printf("  -gpu-remesh   Use RXMesh GPU remeshing for step 1\n");
         return 0;
     }
 
@@ -93,24 +97,26 @@ int actual_main(int argc, char* argv[])
     {
         std::cerr << "usage: " << argv[0]
                   << " <mesh.{obj,ply}>"
-                     " [1|2|3]"
+                     " [1|2|3|4]"
                      " [*.sharp|*.rosy|*.txt]....\n"
-                     " The 1|2|3 parameter determines after which step to stop:\n"
-                     "   1: Remesh and field\n"
-                     "   2: Tracing\n"
-                     "   3: Quadrangulation (default)\n"
+                     " The number determines after which step to stop:\n"
+                     "   1: Remesh only\n"
+                     "   2: Remesh + field\n"
+                     "   3: Remesh + field + trace\n"
+                     "   4: Full pipeline (default)\n"
                      "\n"
-                     " Checkpoint flags:\n"
+                     " Flags:\n"
+                     "   -gpu-remesh        Use RXMesh GPU remeshing for step 1\n"
                      "   -save-dir DIR      Directory for intermediate files\n"
                      "   -save-all          Save after every step\n"
-                     "   -run-from N        Start from step N (1-3)\n"
-                     "   -run-to N          Stop after step N (1-3)\n"
+                     "   -run-from N        Start from step N (1-4)\n"
+                     "   -run-to N          Stop after step N (1-4)\n"
                      "   -list-stages       List all stages\n";
         return 1;
     }
 
     std::string meshFilename;
-    int stopAfterStep = 3;
+    int stopAfterStep = 4;
 
     // Parse positional args (skip checkpoint flags)
     std::vector<std::string> pos_args;
@@ -122,7 +128,8 @@ int actual_main(int argc, char* argv[])
             continue;
         }
         if (strcmp(argv[i], "-save-all") == 0 ||
-            strcmp(argv[i], "-list-stages") == 0) {
+            strcmp(argv[i], "-list-stages") == 0 ||
+            strcmp(argv[i], "-gpu-remesh") == 0) {
             continue;
         }
         pos_args.push_back(argv[i]);
@@ -137,7 +144,7 @@ int actual_main(int argc, char* argv[])
 
     if (pos_args.size() >= 2) {
         int s = std::atoi(pos_args[1].c_str());
-        if (s >= 1 && s <= 3) stopAfterStep = s;
+        if (s >= 1 && s <= 4) stopAfterStep = s;
     }
 
     // Apply checkpoint overrides
@@ -173,6 +180,9 @@ int actual_main(int argc, char* argv[])
     }
     loadConfigFile(configFile, parameters);
 
+    // Apply GPU remesh flag from CLI
+    if (ckpt.gpu_remesh) parameters.gpuRemesh = true;
+
     std::cout<<"Loading:"<<meshFilename.c_str()<<std::endl;
 
     bool allQuad;
@@ -187,43 +197,56 @@ int actual_main(int argc, char* argv[])
     std::cout<<"Loaded "<<trimesh.fn<<" faces and "<<trimesh.vn<<" vertices"<<std::endl;
 
     // ============================================================
-    // Step 1: Remesh and field
+    // Step 1: Remesh
     // ============================================================
 
     if (startStep <= 1) {
-        std::cout<<std::endl<<"--------------------- 1 - Remesh and field ---------------------"<<std::endl;
-        remeshAndField(trimesh, parameters, meshFilename, sharpFilename, fieldFilename);
-        std::cout << "[CHECKPOINT] Step 1 complete. Output files written to disk." << std::endl;
+        std::cout<<std::endl<<"--------------------- 1 - Remesh ---------------------"<<std::endl;
+        doRemesh(trimesh, parameters, meshFilename, sharpFilename);
+        std::cout << "[CHECKPOINT] Step 1 (Remesh) complete." << std::endl;
     } else {
         std::cout << "[CHECKPOINT] Skipping step 1 (run-from=" << startStep << ")" << std::endl;
     }
     if (stopAfterStep == 1) return 0;
 
     // ============================================================
-    // Step 2: Tracing
+    // Step 2: Cross field
     // ============================================================
 
     if (startStep <= 2) {
-        std::cout<<std::endl<<"--------------------- 2 - Tracing ---------------------"<<std::endl;
-        meshFilenamePrefix += "_rem";
-        trace(meshFilenamePrefix, traceTrimesh);
-        std::cout << "[CHECKPOINT] Step 2 complete. Output files written to disk." << std::endl;
+        std::cout<<std::endl<<"--------------------- 2 - Field ---------------------"<<std::endl;
+        doField(trimesh, parameters, meshFilename, fieldFilename);
+        std::cout << "[CHECKPOINT] Step 2 (Field) complete." << std::endl;
     } else {
         std::cout << "[CHECKPOINT] Skipping step 2 (run-from=" << startStep << ")" << std::endl;
-        meshFilenamePrefix += "_rem";
     }
     if (stopAfterStep == 2) return 0;
 
     // ============================================================
-    // Step 3: Quadrangulation
+    // Step 3: Tracing
     // ============================================================
 
     if (startStep <= 3) {
-        std::cout<<std::endl<<"--------------------- 3 - Quadrangulation ---------------------"<<std::endl;
+        std::cout<<std::endl<<"--------------------- 3 - Trace ---------------------"<<std::endl;
+        meshFilenamePrefix += "_rem";
+        trace(meshFilenamePrefix, traceTrimesh);
+        std::cout << "[CHECKPOINT] Step 3 (Trace) complete." << std::endl;
+    } else {
+        std::cout << "[CHECKPOINT] Skipping step 3 (run-from=" << startStep << ")" << std::endl;
+        meshFilenamePrefix += "_rem";
+    }
+    if (stopAfterStep == 3) return 0;
+
+    // ============================================================
+    // Step 4: Quadrangulation
+    // ============================================================
+
+    if (startStep <= 4) {
+        std::cout<<std::endl<<"--------------------- 4 - Quadrangulate ---------------------"<<std::endl;
         quadrangulate(meshFilenamePrefix + ".obj", trimeshToQuadrangulate, quadmesh,
             trimeshPartitions, trimeshCorners, trimeshFeatures, trimeshFeaturesC,
             quadmeshPartitions, quadmeshCorners, ilpResult, parameters);
-        std::cout << "[CHECKPOINT] Step 3 complete." << std::endl;
+        std::cout << "[CHECKPOINT] Step 4 (Quadrangulate) complete." << std::endl;
     }
 
     return 0;

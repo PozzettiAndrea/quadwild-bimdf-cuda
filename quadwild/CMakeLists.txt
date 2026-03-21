@@ -6,6 +6,7 @@ target_link_libraries(quadwild PRIVATE quadwild::quad_from_patches)
 target_link_libraries(quadwild PRIVATE quadwild::cuda)
 
 if(QUADWILD_HAS_CUDA)
+    target_link_libraries(quadwild PRIVATE quadwild::rxmesh_remesh)
     set_target_properties(quadwild PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON)

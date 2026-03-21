@@ -1,0 +1,157 @@
+[23:23:37] [info] RXMesh: Reading /tmp/qw_rxmesh_33898.obj
+[23:23:38] [info] RXMesh: import_obj() #vertices= 34834 
+[23:23:38] [info] RXMesh: import_obj() #faces= 69451 
+[23:23:38] [info] RXMesh: import_obj() #tex= 0 
+[23:23:38] [info] RXMesh: import_obj() #face_tex= 69451 
+[23:23:38] [info] RXMesh: import_obj() #normals = 0 
+[23:23:38] [info] RXMesh: import_obj() #face_normal= 69451 
+[23:23:38] [info] RXMesh: Patcher: (Face) Edge Cut = 8686, (Vertex) Edge Cut = 14821 
+[23:23:38] [info] RXMesh: Patcher: num_patches = 401
+[23:23:38] [info] RXMesh: Patcher: patches_size = 256
+[23:23:38] [info] RXMesh: Patcher: num_components = 1
+[23:23:38] [info] RXMesh: Patcher: Num lloyd run = 10
+[23:23:38] [info] RXMesh: Patcher: Parallel patches construction time = 7.091328 (ms) and 0.7091328 (ms/lloyd_run)
+[23:23:38] [info] RXMesh: Patcher: max_patch_size= 353, min_patch_size= 127, avg_patch_size= 261
+[23:23:38] [info] RXMesh: Patcher: number external ribbon faces = 35283 (50.80%)
+[23:23:38] [info] RXMesh: Num colors = 15
+[23:23:38] [info] RXMesh: #Vertices = 34834, #Faces= 69451, #Edges= 104288, #Patches = 401
+[23:23:38] [info] RXMesh: Input is edge manifold
+[23:23:38] [info] RXMesh: Input is Not closed
+[23:23:38] [info] RXMesh: Input max valence = 11
+[23:23:38] [info] RXMesh: max edge incident faces = 2
+[23:23:38] [info] RXMesh: max face adjacent faces = 3
+[23:23:38] [info] RXMesh: per-patch maximum face count = 353
+[23:23:38] [info] RXMesh: per-patch maximum edge count = 554
+[23:23:38] [info] RXMesh: per-patch maximum vertex count = 202
+[23:23:38] [info] RXMesh: 1) build time = 449.91 (ms)
+[23:23:38] [info] RXMesh: 2) populate_patch_stash time = 3.009006 (ms)
+[23:23:38] [info] RXMesh: 3) patch graph coloring time = 0.450134 (ms)
+[23:23:38] [info] RXMesh: 4) build_device time = 115.81749 (ms)
+[23:23:38] [info] RXMesh:  -buildHT time = 162.80539 (ms)
+[23:23:38] [info] RXMesh:    --lower_bound time = 10.821278 (ms)
+[23:23:38] [info] RXMesh:    --ht.insert time = 6.856341 (ms)
+[23:23:38] [info] RXMesh:    --hashtable.move time = 45.62403 (ms)
+[23:23:38] [info] RXMesh:    --LPHashTable time = 70.69363 (ms)
+[23:23:38] [info] RXMesh:  -bitmask time = 81.046555 (ms)
+[23:23:38] [info] RXMesh:    --bitmask.cudaMemcpy time = 26.813164 (ms)
+[23:23:38] [info] RXMesh: 5) PatchScheduler time = 0.03669 (ms)
+[23:23:38] [info] RXMesh: 6) allocate_extra_patches time = 225.97221 (ms)
+[23:23:38] [info] RXMesh: 7) create_handles time = 2.026188 (ms)
+[23:23:38] [info] RXMesh: 8) context.init time = 0.113161 (ms)
+[23:23:38] [info] RXMesh: cudaMemcpy time = 34.522076 (ms)
+[23:23:38] [info] RXMesh: cudaMalloc time = 52.817028 (ms)
+[23:23:38] [info] RXMesh: malloc time = 6.8258824 (ms)
+[23:23:38] [error] RXMesh: Line 28 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 33 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 34 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 138 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 56 File /home/andredupuy/quadwild-bimdf-cuda/cuda/../libs/rxmesh/apps/Remesh/util.cuh
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 66 File /home/andredupuy/quadwild-bimdf-cuda/cuda/../libs/rxmesh/apps/Remesh/util.cuh
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 28 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 33 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 34 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [warning] RXMesh: Line 3110 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_dynamic.cu
+[23:23:38] [warning] RXMesh: cudaFuncSetAttribute failed: an illegal memory access was encountered — using default shmem
+[23:23:38] [error] RXMesh: Line 1083 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1094 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1128 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh:  RXMeshStatic::check_shared_memory() dynamic shared memory needed for input function (81920 bytes) exceeds the max dynamic shared memory per block for this function (0 bytes)
+[23:23:38] [error] RXMesh: Line 1151 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: RXMeshStatic::check_shared_memory() This kernel will not run since it asks for too many resources i.e., shared memory and/or registers. If you are in Debug mode, try to switch to Release. Otherwise, you may try to change the block size and/or break the kernel into such that the number of registers is less. You may also try reducing the amount of additional shared memory you requested
+[23:23:38] [error] RXMesh: Line 24 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 90 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 94 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 97 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 100 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 138 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 56 File /home/andredupuy/quadwild-bimdf-cuda/cuda/../libs/rxmesh/apps/Remesh/util.cuh
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 66 File /home/andredupuy/quadwild-bimdf-cuda/cuda/../libs/rxmesh/apps/Remesh/util.cuh
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 28 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 33 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 34 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [warning] RXMesh: Line 3110 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_dynamic.cu
+[23:23:38] [warning] RXMesh: cudaFuncSetAttribute failed: an illegal memory access was encountered — using default shmem
+[23:23:38] [error] RXMesh: Line 1083 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1094 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1128 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh:  RXMeshStatic::check_shared_memory() dynamic shared memory needed for input function (82736 bytes) exceeds the max dynamic shared memory per block for this function (0 bytes)
+[23:23:38] [error] RXMesh: Line 1151 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: RXMeshStatic::check_shared_memory() This kernel will not run since it asks for too many resources i.e., shared memory and/or registers. If you are in Debug mode, try to switch to Release. Otherwise, you may try to change the block size and/or break the kernel into such that the number of registers is less. You may also try reducing the amount of additional shared memory you requested
+[23:23:38] [warning] RXMesh: Line 3110 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_dynamic.cu
+[23:23:38] [warning] RXMesh: cudaFuncSetAttribute failed: an illegal memory access was encountered — using default shmem
+[23:23:38] [error] RXMesh: Line 1083 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1094 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1128 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh:  RXMeshStatic::check_shared_memory() dynamic shared memory needed for input function (81920 bytes) exceeds the max dynamic shared memory per block for this function (0 bytes)
+[23:23:38] [error] RXMesh: Line 1151 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: RXMeshStatic::check_shared_memory() This kernel will not run since it asks for too many resources i.e., shared memory and/or registers. If you are in Debug mode, try to switch to Release. Otherwise, you may try to change the block size and/or break the kernel into such that the number of registers is less. You may also try reducing the amount of additional shared memory you requested
+[23:23:38] [error] RXMesh: Line 24 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 90 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 94 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 97 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 100 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 138 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/patch_scheduler.cu
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 56 File /home/andredupuy/quadwild-bimdf-cuda/cuda/../libs/rxmesh/apps/Remesh/util.cuh
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 66 File /home/andredupuy/quadwild-bimdf-cuda/cuda/../libs/rxmesh/apps/Remesh/util.cuh
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 28 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 33 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 34 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [warning] RXMesh: Line 3110 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_dynamic.cu
+[23:23:38] [warning] RXMesh: cudaFuncSetAttribute failed: an illegal memory access was encountered — using default shmem
+[23:23:38] [error] RXMesh: Line 1083 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1094 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 1128 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh:  RXMeshStatic::check_shared_memory() dynamic shared memory needed for input function (81920 bytes) exceeds the max dynamic shared memory per block for this function (0 bytes)
+[23:23:38] [error] RXMesh: Line 1151 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh_static.h
+[23:23:38] [error] RXMesh: RXMeshStatic::check_shared_memory() This kernel will not run since it asks for too many resources i.e., shared memory and/or registers. If you are in Debug mode, try to switch to Release. Otherwise, you may try to change the block size and/or break the kernel into such that the number of registers is less. You may also try reducing the amount of additional shared memory you requested
+[23:23:38] [error] RXMesh: Line 24 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 28 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 33 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 34 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/util/timer.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 60 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered
+[23:23:38] [error] RXMesh: Line 97 File /home/andredupuy/quadwild-bimdf-cuda/libs/rxmesh/include/rxmesh/rxmesh.h
+[23:23:38] [error] RXMesh: CUDA ERROR: an illegal memory access was encountered

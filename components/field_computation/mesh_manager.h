@@ -39,12 +39,17 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <wrap/io_trimesh/export_field.h>
 #include <iostream>
 #include <fstream>
+#include <chrono>
 #include <vcg/complex/algorithms/attribute_seam.h>
 #include <vcg/complex/algorithms/crease_cut.h>
 #include "mesh_field_smoother.h"
 #include <vcg/complex/algorithms/polygonal_algorithms.h>
 
 #include "fields/field_smoother.h"
+
+#if QUADWILD_HAS_CUDA
+#include "rxmesh_remesh.h"
+#endif
 
 // Basic subdivision class
 template <class FaceType>
@@ -710,6 +715,7 @@ public:
     {
         bool UpdateSharp=true;
         bool DoRemesh=true;
+        bool gpuRemesh=false;   // use RXMesh GPU remeshing
         bool surf_dist_check=true;
         ScalarType sharp_feature_thr=35;
         size_t feature_erode_dilate=4;
@@ -719,57 +725,122 @@ public:
         ScalarType remesher_termination_delta = 10000;
     };
 
-    static void BatchProcess(MeshType &mesh,BatchParam &BPar,
-                             typename vcg::tri::FieldSmoother<MeshType>::SmoothParam &FieldParam)
+    // Step 1: Isotropic remeshing (CPU or GPU)
+    static void BatchRemesh(MeshType &mesh, BatchParam &BPar)
     {
         mesh.UpdateDataStructures();
 
         // SELECT SHARP FEATURES
         if (BPar.UpdateSharp)
-            MeshPrepocess<MeshType>::InitSharpFeatures(mesh,BPar.sharp_feature_thr,BPar.feature_erode_dilate);
+            MeshPrepocess<MeshType>::InitSharpFeatures(mesh, BPar.sharp_feature_thr, BPar.feature_erode_dilate);
 
-//        MeshPrepocess<MeshType>::SolveGeometricArtifacts(mesh);
-
-//        // SELECT SHARP FEATURES
-//        if (BPar.UpdateSharp)
-//            MeshPrepocess<MeshType>::InitSharpFeatures(mesh,BPar.sharp_feature_thr,BPar.feature_erode_dilate);
-
-        //DO REMESH IF NEEDED
         if (BPar.DoRemesh)
         {
-            typename AutoRemesher<MeshType>::Params RemPar;
-            RemPar.iterations   = BPar.remesher_iterations;
-            RemPar.targetAspect = BPar.remesher_aspect_ratio;
-            RemPar.targetDeltaFN= BPar.remesher_termination_delta;
-            RemPar.surfDistCheck = BPar.surf_dist_check;
+#if QUADWILD_HAS_CUDA
+            if (BPar.gpuRemesh) {
+                std::cout << "[GPU Remesh] Using RXMesh GPU isotropic remeshing..." << std::endl;
+                auto t0 = std::chrono::high_resolution_clock::now();
 
-            //AutoRemesher<MeshType>::Remesh2(mesh,RemPar);
-            AutoRemesher<MeshType>::RemeshAdapt(mesh,RemPar);
+                // Extract flat arrays from VCG mesh
+                vcg::tri::Allocator<MeshType>::CompactEveryVector(mesh);
+                uint32_t nV = (uint32_t)mesh.vert.size();
+                uint32_t nF = (uint32_t)mesh.face.size();
+                std::vector<float> V_in(nV * 3);
+                std::vector<uint32_t> F_in(nF * 3);
+                for (uint32_t i = 0; i < nV; i++) {
+                    V_in[i*3+0] = (float)mesh.vert[i].P()[0];
+                    V_in[i*3+1] = (float)mesh.vert[i].P()[1];
+                    V_in[i*3+2] = (float)mesh.vert[i].P()[2];
+                }
+                for (uint32_t i = 0; i < nF; i++) {
+                    F_in[i*3+0] = (uint32_t)vcg::tri::Index(mesh, mesh.face[i].V(0));
+                    F_in[i*3+1] = (uint32_t)vcg::tri::Index(mesh, mesh.face[i].V(1));
+                    F_in[i*3+2] = (uint32_t)vcg::tri::Index(mesh, mesh.face[i].V(2));
+                }
 
+                RXMeshRemeshParams rp = rxmesh_remesh_default_params();
+                rp.sharp_angle_degrees = (float)BPar.sharp_feature_thr;
+                rp.num_iterations = (int)BPar.remesher_iterations;
+
+                float *V_out = nullptr; uint32_t nV_out = 0;
+                uint32_t *F_out = nullptr; uint32_t nF_out = 0;
+                uint32_t *feat_edges = nullptr; uint32_t nE_feat = 0;
+
+                rxmesh_remesh(V_in.data(), nV, F_in.data(), nF, &rp,
+                              &V_out, &nV_out, &F_out, &nF_out,
+                              &feat_edges, &nE_feat);
+
+                // Rebuild VCG mesh from output
+                mesh.Clear();
+                vcg::tri::Allocator<MeshType>::AddVertices(mesh, nV_out);
+                vcg::tri::Allocator<MeshType>::AddFaces(mesh, nF_out);
+                for (uint32_t i = 0; i < nV_out; i++) {
+                    mesh.vert[i].P() = typename MeshType::CoordType(
+                        V_out[i*3+0], V_out[i*3+1], V_out[i*3+2]);
+                }
+                for (uint32_t i = 0; i < nF_out; i++) {
+                    mesh.face[i].V(0) = &mesh.vert[F_out[i*3+0]];
+                    mesh.face[i].V(1) = &mesh.vert[F_out[i*3+1]];
+                    mesh.face[i].V(2) = &mesh.vert[F_out[i*3+2]];
+                }
+                free(V_out); free(F_out); free(feat_edges);
+
+                mesh.UpdateDataStructures();
+
+                auto t1 = std::chrono::high_resolution_clock::now();
+                double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+                std::cout << "[GPU Remesh] Done: " << nV_out << " verts, "
+                          << nF_out << " faces in " << ms << " ms" << std::endl;
+
+                // Re-detect sharp features on the remeshed mesh
+                if (BPar.UpdateSharp)
+                    MeshPrepocess<MeshType>::InitSharpFeatures(mesh, BPar.sharp_feature_thr, BPar.feature_erode_dilate);
+            } else
+#endif
+            {
+                auto t0 = std::chrono::high_resolution_clock::now();
+
+                typename AutoRemesher<MeshType>::Params RemPar;
+                RemPar.iterations   = BPar.remesher_iterations;
+                RemPar.targetAspect = BPar.remesher_aspect_ratio;
+                RemPar.targetDeltaFN= BPar.remesher_termination_delta;
+                RemPar.surfDistCheck = BPar.surf_dist_check;
+
+                AutoRemesher<MeshType>::RemeshAdapt(mesh, RemPar);
+
+                auto t1 = std::chrono::high_resolution_clock::now();
+                double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+                std::cout << "[CPU Remesh] Done: " << mesh.vn << " verts, "
+                          << mesh.fn << " faces in " << ms << " ms" << std::endl;
+            }
         }
         mesh.InitFeatureCoordsTable();
 
-//        //THEN UPDATE SHARP FEATURES
-//        if (BPar.UpdateSharp)
-//            MeshPrepocess<MeshType>::InitSharpFeatures(mesh,BPar.sharp_feature_thr,BPar.feature_erode_dilate);
-
-
-        //SOLVE POSSIBLE GEOMETRIC ARTIFACTS AFTER REFINEMENT
+        // Cleanup after remeshing
         MeshPrepocess<MeshType>::SolveGeometricArtifacts(mesh);
-
-        //REFINE THE MESH IF NEEDED TO BE CONSISTENT WHEN COMPUTING FIELD
         MeshPrepocess<MeshType>::RefineIfNeeded(mesh);
+    }
 
-//        //THEN UPDATE SHARP FEATURES
-//        if (BPar.UpdateSharp)
-//            MeshPrepocess<MeshType>::InitSharpFeatures(mesh,BPar.sharp_feature_thr,BPar.feature_erode_dilate);
-//        mesh.ErodeDilate(BPar.feature_erode_dilate);
+    // Step 2: Cross field computation
+    static void BatchField(MeshType &mesh, BatchParam &BPar,
+                           typename vcg::tri::FieldSmoother<MeshType>::SmoothParam &FieldParam)
+    {
+        MeshFieldSmoother<MeshType>::AutoSetupParam(mesh, FieldParam, BPar.SharpFactor);
 
-        MeshFieldSmoother<MeshType>::AutoSetupParam(mesh,FieldParam,BPar.SharpFactor);
-
-        //THEN SMOOTH THE FIELD
         std::cout << "[fieldComputation] Smooth Field Computation..." << std::endl;
-        MeshFieldSmoother<MeshType>::SmoothField(mesh,FieldParam);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        MeshFieldSmoother<MeshType>::SmoothField(mesh, FieldParam);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::cout << "[Field] Done in " << ms << " ms" << std::endl;
+    }
+
+    // Legacy combined method (calls both)
+    static void BatchProcess(MeshType &mesh, BatchParam &BPar,
+                             typename vcg::tri::FieldSmoother<MeshType>::SmoothParam &FieldParam)
+    {
+        BatchRemesh(mesh, BPar);
+        BatchField(mesh, BPar, FieldParam);
     }
 
     static void SaveAllData(MeshType &tri_mesh,const std::string &pathM)

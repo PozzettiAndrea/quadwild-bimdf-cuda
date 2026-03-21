@@ -15,6 +15,7 @@
 struct Parameters {
     Parameters() :
         remesh(true),
+        gpuRemesh(false),
         sharpAngle(35),
         alpha(0.02),
         scaleFact(1),
@@ -25,6 +26,7 @@ struct Parameters {
     }
 
     bool remesh;
+    bool gpuRemesh;     // use RXMesh GPU remeshing instead of CPU VCG
     float sharpAngle;
     float alpha;
     float scaleFact;
@@ -37,6 +39,18 @@ void remeshAndField(
         const Parameters& parameters,
         const std::string& meshFilename,
         const std::string& sharpFilename,
+        const std::string& fieldFilename);
+
+void doRemesh(
+        FieldTriMesh& trimesh,
+        const Parameters& parameters,
+        const std::string& meshFilename,
+        const std::string& sharpFilename);
+
+void doField(
+        FieldTriMesh& trimesh,
+        const Parameters& parameters,
+        const std::string& meshFilename,
         const std::string& fieldFilename);
 
 void quadrangulate(
